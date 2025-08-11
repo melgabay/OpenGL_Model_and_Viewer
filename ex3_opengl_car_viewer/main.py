@@ -19,6 +19,7 @@ ROOF_Y0  = 0.35  # début du toit
 ROOF_Y1  = 1.15  # haut du toit
 ROOF_W   = 0.85  # demi-largeur du toit
 ROOF_L   = 1.25  # demi-longueur du toit
+ROOF_SHIFT = 0.30
 
 WHEEL_R      = 0.45  # rayon des roues
 WHEEL_HALF_W = 0.22  # demi-épaisseur des roues
@@ -92,30 +93,55 @@ class Sector:
     # --- un seul projecteur avant droit ---------------------------------
     def _build_body(self):
         body, windows = [], []
-        # DEMI-CHÂSSIS (côté droit) — bas de caisse + pavillon (toit)
-        body += self._cuboid((0, BASE_Y0, -HALF_LEN), (HALF_W, BASE_Y1, HALF_LEN))
-        body += self._cuboid((0, ROOF_Y0, -ROOF_L), (ROOF_W, ROOF_Y1, ROOF_L))
 
-        # VITRES (on ne fait que le côté gauche + faces avant/arrière, on mirrora à droite dans render)
+        # 1) Bas de caisse (inchangé)
+        body += self._cuboid((0, BASE_Y0, -HALF_LEN), (HALF_W, BASE_Y1, HALF_LEN))
+
+        # 2) Pavillon (toit) avancé en Z de ROOF_SHIFT
+        ROOF_Z0 = -ROOF_L + ROOF_SHIFT  # arrière du toit
+        ROOF_Z1 = ROOF_L + ROOF_SHIFT  # avant  du toit
+        body += self._cuboid((0, ROOF_Y0, ROOF_Z0), (ROOF_W, ROOF_Y1, ROOF_Z1))
+
+        # 3) Vitres recollées au nouveau toit
         inset = 0.001
         V = lambda x, y, z: Vertex(x, y, z)
-
-        # pare-brise (plan z = +ROOF_L)
         yb, yt = ROOF_Y0 + 0.06, ROOF_Y1 - 0.05
-        z_fw = ROOF_L + inset
-        self._add_quad(windows, V(-ROOF_W, yb, z_fw), V(ROOF_W, yb, z_fw),
-                       V(ROOF_W, yt, z_fw), V(-ROOF_W, yt, z_fw))
-        # lunette arrière (plan z = -ROOF_L)
-        z_bw = -ROOF_L - inset
-        self._add_quad(windows, V(ROOF_W, yb, z_bw), V(-ROOF_W, yb, z_bw),
-                       V(-ROOF_W, yt, z_bw), V(ROOF_W, yt, z_bw))
-        # vitres latérales gauche (x = -ROOF_W)
+
+        # Pare-brise = plan au niveau de l'avant du toit
+        z_fw = ROOF_Z1 + inset
+        self._add_quad(windows,
+                       V(-ROOF_W, yb, z_fw), V(ROOF_W, yb, z_fw),
+                       V(ROOF_W, yt, z_fw), V(-ROOF_W, yt, z_fw)
+                       )
+
+        # Lunette arrière = plan au niveau de l'arrière du toit
+        z_bw = ROOF_Z0 - inset
+        self._add_quad(windows,
+                       V(ROOF_W, yb, z_bw), V(-ROOF_W, yb, z_bw),
+                       V(-ROOF_W, yt, z_bw), V(ROOF_W, yt, z_bw)
+                       )
+
+        # Vitres latérales GAUCHE (la droite sera mirroriée au rendu)
         x_glass = -ROOF_W - inset
-        self._add_quad(windows, V(x_glass, yb, -0.95), V(x_glass, yb, -0.25),
-                       V(x_glass, yt, -0.25), V(x_glass, yt, -0.95))
-        self._add_quad(windows, V(x_glass, yb, 0.10), V(x_glass, yb, 0.85),
-                       V(x_glass, yt, 0.85), V(x_glass, yt, 0.10))
+        # bornes le long du toit avancé
+        z1 = ROOF_Z0 + 0.15
+        z2 = (ROOF_Z0 + ROOF_Z1) / 2 - 0.10
+        z3 = (ROOF_Z0 + ROOF_Z1) / 2 + 0.10
+        z4 = ROOF_Z1 - 0.15
+
+        # fenêtre avant
+        self._add_quad(windows,
+                       V(x_glass, yb, z1), V(x_glass, yb, z2),
+                       V(x_glass, yt, z2), V(x_glass, yt, z1)
+                       )
+        # fenêtre arrière
+        self._add_quad(windows,
+                       V(x_glass, yb, z3), V(x_glass, yb, z4),
+                       V(x_glass, yt, z4), V(x_glass, yt, z3)
+                       )
+
         return body, windows
+
 
     def _build_headlight(self):
         # Phare rond (cylindre + disques), orienté vers l'avant (+Z)
@@ -544,82 +570,6 @@ class Triangle:
 # ───────────────────────────────────────────────
 # 2)  LOW-POLY CAR (Sector) : on modèle UNE FOIS
 # ───────────────────────────────────────────────
-class Sector:
-    # ---- helpers ----------------------------------------------------------------
-    @staticmethod
-    def _add_quad(tris, v0, v1, v2, v3):
-        tris.append(Triangle([v0, v1, v2]))
-        tris.append(Triangle([v0, v2, v3]))
-
-    @staticmethod
-    def _cuboid(min_pt, max_pt):
-        x1, y1, z1 = min_pt
-        x2, y2, z2 = max_pt
-        uv = [(0, 0), (1, 0), (1, 1), (0, 1)]
-        V  = lambda x, y, z, i: Vertex(x, y, z, *uv[i])
-
-        t = []
-        Sector._add_quad(t, V(x1, y1, z2, 0), V(x2, y1, z2, 1), V(x2, y2, z2, 2), V(x1, y2, z2, 3))  # avant
-        Sector._add_quad(t, V(x2, y1, z1, 0), V(x1, y1, z1, 1), V(x1, y2, z1, 2), V(x2, y2, z1, 3))  # arrière
-        Sector._add_quad(t, V(x1, y2, z2, 0), V(x2, y2, z2, 1), V(x2, y2, z1, 2), V(x1, y2, z1, 3))  # dessus
-        Sector._add_quad(t, V(x1, y1, z1, 0), V(x2, y1, z1, 1), V(x2, y1, z2, 2), V(x1, y1, z2, 3))  # dessous
-        Sector._add_quad(t, V(x1, y1, z1, 0), V(x1, y1, z2, 1), V(x1, y2, z2, 2), V(x1, y2, z1, 3))  # gauche
-        Sector._add_quad(t, V(x2, y1, z2, 0), V(x2, y1, z1, 1), V(x2, y2, z1, 2), V(x2, y2, z2, 3))  # droite
-        return t
-
-    @staticmethod
-    def _cylinder(center, radius, half_w, segments=18):
-        cx, cy, cz = center
-        tris = []
-        for i in range(segments):
-            a1 = 2 * math.pi * i / segments
-            a2 = 2 * math.pi * (i + 1) / segments
-            x1, y1 = cx + radius * math.cos(a1), cy + radius * math.sin(a1)
-            x2, y2 = cx + radius * math.cos(a2), cy + radius * math.sin(a2)
-            zf, zb = cz - half_w, cz + half_w
-
-            v0, v1 = Vertex(x1, y1, zf), Vertex(x2, y2, zf)
-            v2, v3 = Vertex(x2, y2, zb), Vertex(x1, y1, zb)
-            Sector._add_quad(tris, v0, v1, v2, v3)          # bande latérale
-            tris.append(Triangle([Vertex(cx, cy, zf), v1, v0]))  # disque avant
-            tris.append(Triangle([Vertex(cx, cy, zb), v3, v2]))  # disque arrière
-        return tris
-    # ------------------------------------------------------------------------------
-    def __init__(self):
-        self.triangles_body, self.triangles_windows = self._build_body()
-        self.triangles_wheel = self._cylinder((0, 0, 0), 0.6, 0.2)  # une roue centrée
-        self.triangles_headlight  = self._build_headlight()
-
-    # --- un seul projecteur avant droit ---------------------------------
-    def _build_headlight(self):
-        # phares au coin avant, un peu plus haut
-        z0 = HALF_LEN - 0.18;
-        z1 = HALF_LEN - 0.02  # au bord avant
-        y0 = 0.20;
-        y1 = 0.42  # hauteur capot
-        x0 = HALF_W - 0.45;
-        x1 = HALF_W - 0.05  # collé à l'aile
-        return self._cuboid((x0, y0, z0), (x1, y1, z1))
-
-    def _build_body(self):
-        body, windows = [], []
-        # châssis & toit
-        body += self._cuboid((-2, -0.5, -1), ( 2, 0.5, 1))
-        body += self._cuboid((-1,  0.5, -1), ( 1, 1.5, 1))
-
-        # vitres : avant, arrière, côté gauche
-        y_bot, y_top, inset = 0.6, 1.4, 0.001
-        V = lambda x, y, z: Vertex(x, y, z)
-        self._add_quad(windows, V(-0.9, y_bot, 1.0+inset),  V(0.9, y_bot, 1.0+inset),
-                                 V(0.9, y_top, 1.0+inset),  V(-0.9, y_top, 1.0+inset))
-        self._add_quad(windows, V(0.9, y_bot, -1.0-inset),  V(-0.9, y_bot, -1.0-inset),
-                                 V(-0.9, y_top, -1.0-inset), V(0.9, y_top, -1.0-inset))
-        self._add_quad(windows, V(-1.0-inset, y_bot, -1.0), V(-1.0-inset, y_bot, 0.0),
-                                 V(-1.0-inset, y_top, 0.0), V(-1.0-inset, y_top, -1.0))
-        self._add_quad(windows, V(-1.0-inset, y_bot, 0.0),  V(-1.0-inset, y_bot, 1.0),
-                                 V(-1.0-inset, y_top, 1.0), V(-1.0-inset, y_top, 0.0))
-        return body, windows
-
 
 class ExtraModels:
     def __init__(self):
