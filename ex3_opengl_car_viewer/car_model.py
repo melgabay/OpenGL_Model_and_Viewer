@@ -6,14 +6,63 @@ def draw_car(wireframe=False, show_lights=True):
     draw_chassis()
     draw_windows()
     draw_doors()
-    for x in [-0.8, 0.8]:
-        for z in [-0.6, 0.6]:
-            draw_wheel(x, z)
+
+    # --- PNEU de référence : on le dessine une seule fois ---
+    # Position de base (équivalent à +X, +Z dans ton ancien repère)
+    glPushMatrix()
+    draw_wheel(0.8, 0.6)
+    glPopMatrix()
+
+    # Miroir X -> (-X, +Z)  => 1 axe négatif => inverser winding
+    glPushMatrix()
+    glScalef(-1, 1, 1)
+    glFrontFace(GL_CW)
+    draw_wheel(0.8, 0.6)
+    glFrontFace(GL_CCW)
+    glPopMatrix()
+
+    # Miroir Z -> (+X, -Z)  => 1 axe négatif => inverser winding
+    glPushMatrix()
+    glScalef(1, 1, -1)
+    glFrontFace(GL_CW)
+    draw_wheel(0.8, 0.6)
+    glFrontFace(GL_CCW)
+    glPopMatrix()
+
+    # Miroir X et Z -> (-X, -Z)  => 2 axes négatifs (pair) => winding conservé
+    glPushMatrix()
+    glScalef(-1, 1, -1)
+    # pas besoin de glFrontFace ici
+    draw_wheel(0.8, 0.6)
+    glPopMatrix()
+
+    # --- PHARE de référence (droite, +X) ---
     draw_headlight(0.5)
-    draw_headlight(-0.5)
+
+    # Miroir X pour le phare gauche (-X) => 1 axe négatif => inverser winding
+    glPushMatrix()
+    glScalef(-1, 1, 1)
+    glFrontFace(GL_CW)
+    draw_headlight(0.5)
+    glFrontFace(GL_CCW)
+    glPopMatrix()
+
+    # --- SPHÈRES de lumière (debug), même logique ---
     if show_lights:
+        glPushAttrib(GL_LIGHTING_BIT)
+        glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0, 1])
+        # droite (+X)
         draw_light_sphere(0.5)
-        draw_light_sphere(-0.5)
+        # gauche (miroir X)
+        glPushMatrix()
+        glScalef(-1, 1, 1)
+        glFrontFace(GL_CW)
+        draw_light_sphere(0.5)
+        glFrontFace(GL_CCW)
+        glPopMatrix()
+        glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])
+        glPopAttrib()
+
     glPopMatrix()
 
 def draw_chassis():

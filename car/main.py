@@ -75,25 +75,51 @@ class Sector:
     def _build_headlight(self):
         return self._cuboid((0.6, -0.1, 1.05), (1.0, 0.1, 1.3))
 
-
     def _build_body(self):
         body, windows = [], []
-        # châssis & toit
-        body += self._cuboid((-2, -0.5, -1), ( 2, 0.5, 1))
-        body += self._cuboid((-1,  0.5, -1), ( 1, 1.5, 1))
+        # châssis & toit — DEMI-CHÂSSIS (côté droit seulement)
+        body += self._cuboid((0, -0.5, -1), (2, 0.5, 1))  # était (-2, -0.5, -1) → ( 2, 0.5, 1)
+        body += self._cuboid((0, 0.5, -1), (1, 1.5, 1))  # était (-1,  0.5, -1) → ( 1, 1.5, 1)
 
-        # vitres : avant, arrière, côté gauche
+        # vitres : (on garde le côté gauche tel quel, et on mirrora à droite dans render)
         y_bot, y_top, inset = 0.6, 1.4, 0.001
         V = lambda x, y, z: Vertex(x, y, z)
-        self._add_quad(windows, V(-0.9, y_bot, 1.0+inset),  V(0.9, y_bot, 1.0+inset),
-                                 V(0.9, y_top, 1.0+inset),  V(-0.9, y_top, 1.0+inset))
-        self._add_quad(windows, V(0.9, y_bot, -1.0-inset),  V(-0.9, y_bot, -1.0-inset),
-                                 V(-0.9, y_top, -1.0-inset), V(0.9, y_top, -1.0-inset))
-        self._add_quad(windows, V(-1.0-inset, y_bot, -1.0), V(-1.0-inset, y_bot, 0.0),
-                                 V(-1.0-inset, y_top, 0.0), V(-1.0-inset, y_top, -1.0))
-        self._add_quad(windows, V(-1.0-inset, y_bot, 0.0),  V(-1.0-inset, y_bot, 1.0),
-                                 V(-1.0-inset, y_top, 1.0), V(-1.0-inset, y_top, 0.0))
+        self._add_quad(windows, V(-0.9, y_bot, 1.0 + inset), V(0.9, y_bot, 1.0 + inset),
+                       V(0.9, y_top, 1.0 + inset), V(-0.9, y_top, 1.0 + inset))
+        self._add_quad(windows, V(0.9, y_bot, -1.0 - inset), V(-0.9, y_bot, -1.0 - inset),
+                       V(-0.9, y_top, -1.0 - inset), V(0.9, y_top, -1.0 - inset))
+        self._add_quad(windows, V(-1.0 - inset, y_bot, -1.0), V(-1.0 - inset, y_bot, 0.0),
+                       V(-1.0 - inset, y_top, 0.0), V(-1.0 - inset, y_top, -1.0))
+        self._add_quad(windows, V(-1.0 - inset, y_bot, 0.0), V(-1.0 - inset, y_bot, 1.0),
+                       V(-1.0 - inset, y_top, 1.0), V(-1.0 - inset, y_top, 0.0))
         return body, windows
+
+class ExtraModels:
+    def __init__(self):
+        self.tris = []
+        self.tris += self._build_lamp_post()
+
+    def _build_lamp_post(self):
+        t = []
+        # Tige verticale
+        t += Sector._cylinder((5, 0, 0), 0.1, 2.0)
+        # Tête du lampadaire
+        t += Sector._cuboid((4.8, 2.0, -0.2), (5.2, 2.2, 0.2))
+        # Sphère émissive (optionnel, visible uniquement)
+        self.lamp_sphere_pos = (5.0, 2.1, 0.0)
+        return t
+
+    def draw_emissive_sphere(self):
+        # Sphère lumineuse jaune non affectée par l’éclairage
+        glPushAttrib(GL_LIGHTING_BIT)
+        glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0.2, 1])  # jaune doux
+        glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1, 1, 0.2, 1])
+        glPushMatrix()
+        glTranslatef(*self.lamp_sphere_pos)
+        glutSolidSphere(0.15, 12, 12)
+        glPopMatrix()
+        glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])  # reset
+        glPopAttrib()
 
 # ───────────────────────────────────────────────
 # 3)  RENDERER
@@ -123,6 +149,7 @@ class Renderer:
         self.rot_q = [1.0, 0.0, 0.0, 0.0]  # quaternion (w,x,y,z)
         self.last_vec = (0.0, 0.0, 1.0)
         self.win_w, self.win_h = 800, 600
+        self.extras = ExtraModels()
     # ------------------------------------------------------------------
     # 1)  INITIALISATION OPENGL
     # ------------------------------------------------------------------
@@ -201,8 +228,10 @@ class Renderer:
 
         # ---------- CAMÉRA ----------
         # 1) rotation (trackball)  2) zoom (recul sur Z)
-        glMultMatrixf(self._quat_to_matrix(self.rot_q))   # applique la rotation
-        glTranslatef(0, 0, -self.zoom)                   # puis recule la caméra
+        # ancien comportement souris (Euler)
+        glTranslatef(0, 0, -self.zoom)
+        glRotatef(self.angle_x, 1, 0, 0)
+        glRotatef(self.angle_y, 0, 1, 0)
 
         # positions des lampes dans le repère courant
         glLightfv(GL_LIGHT0, GL_POSITION, Renderer.LIGHT0_POS)
@@ -214,11 +243,21 @@ class Renderer:
         glPushMatrix()
         glTranslatef(*self.car_pos)
 
-        # carrosserie
+        # carrosserie (demi-châssis modélisé une seule fois → miroir X pour l’autre côté)
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.9, 0.1, 0.1, 1])
         glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1, 1, 1, 1])
         glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64)
+
+        # côté droit (modélisé)
         self._draw_mesh(self.sector.triangles_body)
+
+        # miroir X → côté gauche (1 axe négatif → winding inversé)
+        glPushMatrix()
+        glScalef(-1, 1, 1)
+        glFrontFace(GL_CW)
+        self._draw_mesh(self.sector.triangles_body)
+        glFrontFace(GL_CCW)
+        glPopMatrix()
 
         # vitres (gauche + miroir droite)
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.1, 0.1, 0.1, 1])
@@ -277,6 +316,13 @@ class Renderer:
                 glPopMatrix()
             glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])  # reset
             glPopAttrib()
+
+        # ------------------ modèle bonus : lampadaire ---------------------
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.3, 0.3, 0.3, 1])
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.5, 0.5, 0.5, 1])
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 16)
+        self._draw_mesh(self.extras.tris)
+        self.extras.draw_emissive_sphere()
 
         # ------------------ HUD ----------------------------------------
         self._draw_text(f"Car Pos:   {self.car_pos}", 10, 580)
@@ -388,27 +434,17 @@ class Renderer:
             self.zoom = max(2.0, self.zoom + dy * 0.05)
 
         elif self.mouse_drag:
-            v_from = self._project_on_sphere(*self.last_mouse)
-            v_to = self._project_on_sphere(x, y)
-
-            axis = (
-                v_from[1] * v_to[2] - v_from[2] * v_to[1],
-                v_from[2] * v_to[0] - v_from[0] * v_to[2],
-                v_from[0] * v_to[1] - v_from[1] * v_to[0]
-            )
-            axis_len = math.sqrt(axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2)
-            if axis_len > 1e-6:
-                axis = (axis[0] / axis_len, axis[1] / axis_len, axis[2] / axis_len)
-                dot = max(-1.0, min(1.0,
-                                    v_from[0] * v_to[0] + v_from[1] * v_to[1] + v_from[2] * v_to[2]))
-                angle = math.acos(dot)
-                s = math.sin(angle / 2.0)
-                q_drag = (math.cos(angle / 2.0), axis[0] * s, axis[1] * s, axis[2] * s)
-                self.rot_q = self._quat_mult(q_drag, self.rot_q)
-                self.rot_q = self._quat_normalize(self.rot_q)
+            dx = x - self.last_mouse[0]
+            dy = y - self.last_mouse[1]
+            self.angle_y += dx * 0.5  # horizontal → yaw
+            self.angle_x += dy * 0.5  # vertical   → pitch
+            # (optionnel) clamp pour éviter les flips :
+            # self.angle_x = max(-89.0, min(89.0, self.angle_x))
 
         self.last_mouse = (x, y)
         glutPostRedisplay()
+
+
 # ───────────────────────────────────────────────
 # 4)  RESHAPE
 # ───────────────────────────────────────────────
