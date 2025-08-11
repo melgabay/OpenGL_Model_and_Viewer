@@ -1,4 +1,4 @@
-# main.py – Low-poly car • Trackball • HUD • Miroir • Éclairage
+# main.py – Low-poly car • Trackball (Euler) • HUD • Éclairage
 # Python 3.x  +  PyOpenGL  +  FreeGLUT
 from OpenGL.GL   import *
 from OpenGL.GLU  import *
@@ -6,152 +6,266 @@ from OpenGL.GLUT import *
 import sys, math
 
 AXIS_LEN = 3.0  # longueur des axes XYZ
-# proportions "blueprint"
 
 # --- proportions "blueprint" (repère: X=gauche/droite, Y=haut/bas, Z=avant/arrière) ---
-HALF_LEN = 2.2   # demi-longueur du châssis (Z)
-HALF_W   = 1.3   # demi-largeur du châssis (X)
+HALF_LEN   = 2.25
+HALF_W     = 1.30
+BASE_Y0    = -0.52
+BASE_Y1    =  0.32
+ROOF_Y0    = 0.44
+ROOF_Y1    = 1.02
+ROOF_W     = 0.75
+ROOF_L     = 1.10
+ROOF_SHIFT = 0.10
+WHEEL_R      = 0.45
+WHEEL_HALF_W = 0.22
+NOSE_LEN   = 1.35
+TRUNK_LEN  = 1.00
+HOOD_DROP  = 0.42
+TRUNK_DROP = 0.30
 
-BASE_Y0  = -0.5  # bas du bas de caisse
-BASE_Y1  =  0.35 # haut du bas de caisse
-
-ROOF_Y0  = 0.35  # début du toit
-ROOF_Y1  = 1.15  # haut du toit
-ROOF_W   = 0.85  # demi-largeur du toit
-ROOF_L   = 1.25  # demi-longueur du toit
-ROOF_SHIFT = 0.30
-
-WHEEL_R      = 0.45  # rayon des roues
-WHEEL_HALF_W = 0.22  # demi-épaisseur des roues
-# utilisé par reshape / callbacks
-app = None
+app = None  # pour reshape / callbacks
 
 # ───────────────────────────────────────────────
-# 1)  STRUCTURES DE DONNÉES
+# 1)  STRUCTURES
 # ───────────────────────────────────────────────
 class Vertex:
     def __init__(self, x, y, z, u=0, v=0):
         self.x, self.y, self.z = x, y, z
-        self.u, self.v        = u, v
+        self.u, self.v = u, v
 
 class Triangle:
     def __init__(self, vertices):
-        self.vertices = vertices           # list[3] Vertex
+        self.vertices = vertices  # list[3] Vertex
 
 # ───────────────────────────────────────────────
-# 2)  LOW-POLY CAR (Sector) : on modèle UNE FOIS
+# 2)  GEO UTILS
 # ───────────────────────────────────────────────
 class Sector:
-    # ---- helpers ----------------------------------------------------------------
     @staticmethod
     def _add_quad(tris, v0, v1, v2, v3):
         tris.append(Triangle([v0, v1, v2]))
         tris.append(Triangle([v0, v2, v3]))
 
-
     @staticmethod
-    def _cuboid(min_pt, max_pt):
-        x1, y1, z1 = min_pt
-        x2, y2, z2 = max_pt
+    def _cuboid_half_open_x0(min_pt, max_pt):
+        x0, y0, z0 = min_pt
+        x1, y1, z1 = max_pt
         V = lambda x, y, z: Vertex(x, y, z)
         t = []
         # avant / arrière
+        Sector._add_quad(t, V(x0, y0, z1), V(x1, y0, z1), V(x1, y1, z1), V(x0, y1, z1))
+        Sector._add_quad(t, V(x1, y0, z0), V(x0, y0, z0), V(x0, y1, z0), V(x1, y1, z0))
+        # dessus
+        Sector._add_quad(t, V(x0, y1, z1), V(x1, y1, z1), V(x1, y1, z0), V(x0, y1, z0))
+        # >>> DESSOUS (winding corrigé pour normal vers -Y) <<<
+        Sector._add_quad(t, V(x0, y0, z1), V(x1, y0, z1), V(x1, y0, z0), V(x0, y0, z0))
+        # côté x1 (seulement)
+        Sector._add_quad(t, V(x1, y0, z1), V(x1, y0, z0), V(x1, y1, z0), V(x1, y1, z1))
+        return t
+
+    @staticmethod
+    def _wedge_half_open_x0(tris, x0, x1, z0, z1, yb, yt0, yt1):
+        V = lambda x, y, z: Vertex(x, y, z)
+        # >>> DESSOUS (winding corrigé pour normal vers -Y) <<<
+        Sector._add_quad(tris, V(x0, yb, z1), V(x1, yb, z1), V(x1, yb, z0), V(x0, yb, z0))
+        # dessus incliné — winding inversé pour normale vers l'extérieur (+Y côté pente)
+        Sector._add_quad(tris, V(x0, yt1, z1), V(x1, yt1, z1), V(x1, yt0, z0), V(x0, yt0, z0))
+        # face z1
+        Sector._add_quad(tris, V(x0, yb, z1), V(x1, yb, z1), V(x1, yt1, z1), V(x0, yt1, z1))
+        # face z0
+        Sector._add_quad(tris, V(x1, yb, z0), V(x0, yb, z0), V(x0, yt0, z0), V(x1, yt0, z0))
+        # côté x1 uniquement
+        Sector._add_quad(tris, V(x1, yb, z1), V(x1, yb, z0), V(x1, yt0, z0), V(x1, yt1, z1))
+
+    @staticmethod
+    def _cuboid(min_pt, max_pt):
+        x1, y1, z1 = min_pt; x2, y2, z2 = max_pt
+        V=lambda x,y,z: Vertex(x,y,z); t=[]
         Sector._add_quad(t, V(x1,y1,z2), V(x2,y1,z2), V(x2,y2,z2), V(x1,y2,z2))
         Sector._add_quad(t, V(x2,y1,z1), V(x1,y1,z1), V(x1,y2,z1), V(x2,y2,z1))
-        # dessus / dessous
         Sector._add_quad(t, V(x1,y2,z2), V(x2,y2,z2), V(x2,y2,z1), V(x1,y2,z1))
         Sector._add_quad(t, V(x1,y1,z1), V(x2,y1,z1), V(x2,y1,z2), V(x1,y1,z2))
-        # côtés
         Sector._add_quad(t, V(x1,y1,z1), V(x1,y1,z2), V(x1,y2,z2), V(x1,y2,z1))
         Sector._add_quad(t, V(x2,y1,z2), V(x2,y1,z1), V(x2,y2,z1), V(x2,y2,z2))
         return t
 
     @staticmethod
     def _cylinder(center, radius, half_w, segments=24):
-        cx, cy, cz = center
-        tris = []
+        cx, cy, cz = center; tris=[]
         for i in range(segments):
-            a1 = 2*math.pi*i/segments
-            a2 = 2*math.pi*(i+1)/segments
-            x1, y1 = cx + radius*math.cos(a1), cy + radius*math.sin(a1)
-            x2, y2 = cx + radius*math.cos(a2), cy + radius*math.sin(a2)
-            zf, zb = cz - half_w, cz + half_w
-            v0, v1 = Vertex(x1, y1, zf), Vertex(x2, y2, zf)
-            v2, v3 = Vertex(x2, y2, zb), Vertex(x1, y1, zb)
-            Sector._add_quad(tris, v0, v1, v2, v3)
-            tris.append(Triangle([Vertex(cx, cy, zf), v1, v0]))
-            tris.append(Triangle([Vertex(cx, cy, zb), v3, v2]))
+            a1=2*math.pi*i/segments; a2=2*math.pi*(i+1)/segments
+            x1=cx+radius*math.cos(a1); y1=cy+radius*math.sin(a1)
+            x2=cx+radius*math.cos(a2); y2=cy+radius*math.sin(a2)
+            zf,zb = cz-half_w, cz+half_w
+            v0,v1=Vertex(x1,y1,zf),Vertex(x2,y2,zf); v2,v3=Vertex(x2,y2,zb),Vertex(x1,y1,zb)
+            Sector._add_quad(tris, v0,v1,v2,v3)                      # manteau
+            tris.append(Triangle([Vertex(cx,cy,zf), v1, v0]))        # face -z
+            tris.append(Triangle([Vertex(cx,cy,zb), v3, v2]))        # face +z
         return tris
 
-    # ------------------------------------------------------------------------------
+    @staticmethod
+    def _mirror_tris_x(tris):
+        # renvoie une copie mirroir en X, winding inversé pour rester CCW
+        out = []
+        for t in tris:
+            m = [Vertex(-v.x, v.y, v.z) for v in t.vertices]
+            out.append(Triangle([m[0], m[2], m[1]]))  # inversion de l'ordre
+        return out
+
     def __init__(self):
-        self.triangles_body, self.triangles_windows = self._build_body()
+        # 1/2 voiture (droite) + panneaux centraux + jupe sous phares
+        half, win_side, glass_center, under_headlight = self._build_body_half()
+
+        # miroir AU BUILD (pas au rendu)
+        self.triangles_body = half + self._mirror_tris_x(half)
+        self.triangles_windows = win_side + self._mirror_tris_x(win_side) + glass_center
+        self.triangles_under_headlight = under_headlight + self._mirror_tris_x(under_headlight)
+
+        # roues & phare
         self.triangles_wheel = self._cylinder((0, 0, 0), WHEEL_R, WHEEL_HALF_W)
         self.triangles_headlight = self._build_headlight()
 
+    def _build_body_half(self):
+        body_half = []
+        windows_side = []
+        glass_center = []  # pare-brise + lunette
+        under_headlight = []  # jupe sous phares (séparée pour couleur)
 
-    # --- un seul projecteur avant droit ---------------------------------
-    def _build_body(self):
-        body, windows = [], []
+        x0, x1 = 0.0, HALF_W
+        z_mid_front = HALF_LEN - NOSE_LEN
+        z_mid_back = -HALF_LEN + TRUNK_LEN
 
-        # 1) Bas de caisse (inchangé)
-        body += self._cuboid((0, BASE_Y0, -HALF_LEN), (HALF_W, BASE_Y1, HALF_LEN))
-
-        # 2) Pavillon (toit) avancé en Z de ROOF_SHIFT
-        ROOF_Z0 = -ROOF_L + ROOF_SHIFT  # arrière du toit
-        ROOF_Z1 = ROOF_L + ROOF_SHIFT  # avant  du toit
-        body += self._cuboid((0, ROOF_Y0, ROOF_Z0), (ROOF_W, ROOF_Y1, ROOF_Z1))
-
-        # 3) Vitres recollées au nouveau toit
-        inset = 0.001
         V = lambda x, y, z: Vertex(x, y, z)
-        yb, yt = ROOF_Y0 + 0.06, ROOF_Y1 - 0.05
+        EPS = 0.002
 
-        # Pare-brise = plan au niveau de l'avant du toit
-        z_fw = ROOF_Z1 + inset
-        self._add_quad(windows,
-                       V(-ROOF_W, yb, z_fw), V(ROOF_W, yb, z_fw),
-                       V(ROOF_W, yt, z_fw), V(-ROOF_W, yt, z_fw)
-                       )
+        # 1) Bas de caisse central (demi, ouvert sur x=0)
+        body_half += self._cuboid_half_open_x0(
+            (x0, BASE_Y0, z_mid_back),
+            (x1, BASE_Y1, z_mid_front)
+        )
 
-        # Lunette arrière = plan au niveau de l'arrière du toit
-        z_bw = ROOF_Z0 - inset
-        self._add_quad(windows,
-                       V(ROOF_W, yb, z_bw), V(-ROOF_W, yb, z_bw),
-                       V(-ROOF_W, yt, z_bw), V(ROOF_W, yt, z_bw)
-                       )
+        # 2) Cloison avant à z = z_mid_front (normale vers -Z)
+        Sector._add_quad(
+            body_half,
+            V(x1, BASE_Y0, z_mid_front + EPS),
+            V(x0, BASE_Y0, z_mid_front + EPS),
+            V(x0, BASE_Y1, z_mid_front + EPS),
+            V(x1, BASE_Y1, z_mid_front + EPS)
+        )
 
-        # Vitres latérales GAUCHE (la droite sera mirroriée au rendu)
-        x_glass = -ROOF_W - inset
-        # bornes le long du toit avancé
-        z1 = ROOF_Z0 + 0.15
-        z2 = (ROOF_Z0 + ROOF_Z1) / 2 - 0.10
-        z3 = (ROOF_Z0 + ROOF_Z1) / 2 + 0.10
-        z4 = ROOF_Z1 - 0.15
+        # 3) Plancher sous capot (horizontal) z_mid_front → HALF_LEN (normale -Y)
+        floor_y = BASE_Y0 + 0.01
+        Sector._add_quad(
+            body_half,
+            V(x0, floor_y, HALF_LEN - EPS),
+            V(x1, floor_y, HALF_LEN - EPS),
+            V(x1, floor_y, z_mid_front + EPS),
+            V(x0, floor_y, z_mid_front + EPS)
+        )
 
-        # fenêtre avant
-        self._add_quad(windows,
-                       V(x_glass, yb, z1), V(x_glass, yb, z2),
-                       V(x_glass, yt, z2), V(x_glass, yt, z1)
-                       )
-        # fenêtre arrière
-        self._add_quad(windows,
-                       V(x_glass, yb, z3), V(x_glass, yb, z4),
-                       V(x_glass, yt, z4), V(x_glass, yt, z3)
-                       )
+        # 4) Jupe sous phares (fermeture inférieure du nez) — stockée séparément
+        BUMPER_LIP = 0.12
+        BUMPER_TAPER = 0.18
+        yb = BASE_Y0 + EPS
+        yt0 = BASE_Y1 - BUMPER_LIP
+        yt1 = BASE_Y1 - HOOD_DROP - BUMPER_TAPER
+        tmp = []
+        self._wedge_half_open_x0(tmp, x0, x1, z_mid_front, HALF_LEN, yb, yt0, yt1)
+        # On ne l’ajoute qu’à under_headlight, pas au body_half
+        under_headlight += tmp
 
-        return body, windows
+        # 5) Capot avant (pente supérieure)
+        self._wedge_half_open_x0(
+            body_half, x0, x1, z_mid_front, HALF_LEN,
+            BASE_Y0, BASE_Y1, BASE_Y1 - HOOD_DROP
+        )
+
+        # 6) Malle arrière
+        self._wedge_half_open_x0(
+            body_half, x0, x1, -HALF_LEN, z_mid_back,
+            BASE_Y0, BASE_Y1 - TRUNK_DROP, BASE_Y1
+        )
+
+        # 7) Pavillon (moitié droite) — ALIGNE EN X AVEC LA CAISSE
+        #    → x1 = HALF_W (au lieu de ROOF_W) + bas collé à BASE_Y1
+        roof_z0 = -ROOF_L + ROOF_SHIFT - 0.25
+        roof_z1 = ROOF_L + ROOF_SHIFT - 0.25
+        body_half += self._cuboid_half_open_x0(
+            (0.0, BASE_Y1, roof_z0),  # bas du pavillon collé à la caisse
+            (HALF_W, ROOF_Y1, roof_z1)  # demi-largeur = même que la caisse
+        )
+
+        # 8) Vitres latérales (droite) — deux vitres séparées par un montant (B-pillar)
+        inset = 0.05
+        yb_w, yt_w = BASE_Y1 + 0.05, ROOF_Y1 - 0.06
+        xg = HALF_W + inset
+
+        # positions le long de Z
+        pillar_w = 0.08                                    # largeur du montant central
+        midZ = (roof_z0 + roof_z1) * 0.5
+        zA = roof_z0 + 0.20                             # début vitre avant
+        zB = midZ - pillar_w * 0.9                         # fin vitre avant
+        zC = midZ + pillar_w * 0.9                         # début vitre arrière
+        zD = roof_z1 - 0.20                              # fin vitre arrière
+
+        # vitre avant (plan x = HALF_W + inset)
+        windows_side += [
+            Triangle([V(xg, yb_w, zA), V(xg, yb_w, zB), V(xg, yt_w, zB)]),
+            Triangle([V(xg, yb_w, zA), V(xg, yt_w, zB), V(xg, yt_w, zA)]),
+        ]
+        # vitre arrière
+        windows_side += [
+            Triangle([V(xg, yb_w, zC), V(xg, yb_w, zD), V(xg, yt_w, zD)]),
+            Triangle([V(xg, yb_w, zC), V(xg, yt_w, zD), V(xg, yt_w, zC)]),
+        ]
+
+        # 9) Pare-brise + lunette (panneaux centraux) — insets plus grands pour éviter le Z-fighting
+        # 9) Pare-brise + lunette (panneaux centraux)
+        #    Même technique que les vitres latérales : 2 triangles coplanaires
+        #    sur un plan vertical à z constant (plus d'inclinaison → plus d'espace).
+        inset_front = 0.001   # pousse très légèrement vers +Z (évite Z-fighting)
+        inset_back  = -0.001  # pousse très légèrement vers −Z
+        y_bottom_ws = BASE_Y1 + 0.02
+        y_top_ws    = ROOF_Y1 - 0.02
+
+        zf = z_mid_front + inset_front
+        zb = z_mid_back  + inset_back
+        pb_half_width = HALF_W * 0.7
+        # Pare-brise avant (plan z = zf)
+        glass_center += [
+            Triangle([V(-pb_half_width, y_bottom_ws, zf+0.05),
+                      V( pb_half_width, y_bottom_ws, zf+0.05),
+                      V( pb_half_width, y_top_ws,    zf+0.05)]),
+            Triangle([V(-pb_half_width, y_bottom_ws, zf+0.05),
+                      V( pb_half_width, y_top_ws,    zf+0.05),
+                      V(-pb_half_width, y_top_ws,    zf+0.05)])
+        ]
+
+        # Lunette arrière (plan z = zb)
+        glass_center += [
+            Triangle([V( pb_half_width, y_bottom_ws, zb),
+                      V(-pb_half_width, y_bottom_ws, zb),
+                      V(-pb_half_width, y_top_ws,    zb)]),
+            Triangle([V( pb_half_width, y_bottom_ws, zb),
+                      V(-pb_half_width, y_top_ws,    zb),
+                      V( pb_half_width, y_top_ws,    zb)])
+        ]
+
+        return body_half, windows_side, glass_center, under_headlight
+
 
 
     def _build_headlight(self):
-        # Phare rond (cylindre + disques), orienté vers l'avant (+Z)
-        r = 0.14  # rayon du phare
-        half_t = 0.035  # demi-épaisseur (phare très fin)
-        cx = HALF_W - 0.4  # proche de l'aile droite
-        cy = 0.1  # hauteur du phare (descends/monte ici)
-        cz = HALF_LEN + 0.02  # très léger décalage en avant pour éviter le z-fighting
+        r = 0.12; half_t = 0.03
+        cx = HALF_W - 0.28
+        cy = BASE_Y1 - 0.60
+        cz = HALF_LEN + 0.02
         return self._cylinder((cx, cy, cz), r, half_t, segments=24)
 
+# ───────────────────────────────────────────────
+# 2b)  LAMPADAIRE
+# ───────────────────────────────────────────────
 class ExtraModels:
     def __init__(self):
         self.tris = []
@@ -159,103 +273,86 @@ class ExtraModels:
 
     def _build_lamp_post(self):
         t = []
-        # Tige verticale
         t += Sector._cylinder((5, 0, 0), 0.1, 2.0)
-        # Tête du lampadaire
         t += Sector._cuboid((4.8, 2.0, -0.2), (5.2, 2.2, 0.2))
-        # Sphère émissive (optionnel, visible uniquement)
         self.lamp_sphere_pos = (5.0, 2.1, 0.0)
         return t
 
     def draw_emissive_sphere(self):
-        # Sphère lumineuse jaune non affectée par l’éclairage
         glPushAttrib(GL_LIGHTING_BIT)
-        glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0.2, 1])  # jaune doux
+        glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0.2, 1])
         glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1, 1, 0.2, 1])
-        glPushMatrix()
-        glTranslatef(*self.lamp_sphere_pos)
+        glPushMatrix(); glTranslatef(*self.lamp_sphere_pos)
         glutSolidSphere(0.15, 12, 12)
         glPopMatrix()
-        glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])  # reset
+        glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])
         glPopAttrib()
 
 # ───────────────────────────────────────────────
 # 3)  RENDERER
 # ───────────────────────────────────────────────
 class Renderer:
-    # --- positions WORLD des lumières ----
     LIGHT0_POS = [ 3.0, 3.0,  4.0, 1.0]
     LIGHT1_POS = [-4.0, 5.0, -2.0, 1.0]
 
     def __init__(self):
         self.sector = Sector()
-
-        # caméra / trackball
-        self.zoom            = 10.0
+        self.zoom = 10.0
         self.angle_x, self.angle_y = 20.0, 30.0
         self.mouse_drag = False
         self.mouse_drag_zoom = False
         self.last_mouse = (0, 0)
-
-        # translation de la voiture / origine axes
+        self.win_w, self.win_h = 800, 600
         self.car_pos     = [0.0, 0.0, 0.0]
         self.axis_origin = [0.0, 0.0, 0.0]
-
-        # toggle sphères lumières
         self.show_lights = True
-
-        self.rot_q = [1.0, 0.0, 0.0, 0.0]  # quaternion (w,x,y,z)
-        self.last_vec = (0.0, 0.0, 1.0)
-        self.win_w, self.win_h = 800, 600
         self.extras = ExtraModels()
-    # ------------------------------------------------------------------
-    # 1)  INITIALISATION OPENGL
-    # ------------------------------------------------------------------
+
+    # init OpenGL
     def init_gl(self):
         glEnable(GL_DEPTH_TEST)
-        glEnable(GL_LIGHTING)
-        glEnable(GL_LIGHT0)
-        glEnable(GL_LIGHT1)
+        glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_LIGHT1)
         glEnable(GL_NORMALIZE)
-
-        # --- modèle d’éclairage : one-sided (définitif) ---------------
-        #      ↳ passe à GL_TRUE seulement pour déboguer les normales
         glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_FALSE)
-
-        # --- back-face culling (exigence finale) -----------------------
-        glEnable(GL_CULL_FACE)
-        glCullFace(GL_BACK)
-        glFrontFace(GL_CCW)  # CCW = face avant
-
+        glEnable(GL_CULL_FACE); glCullFace(GL_BACK); glFrontFace(GL_CCW)
         glShadeModel(GL_SMOOTH)
-        glClearColor(1.0, 1.0, 1.0, 1.0)
+        glClearColor(0, 0, 0, 1)
+        glLightfv(GL_LIGHT0, GL_DIFFUSE,  [1,1,1,1]); glLightfv(GL_LIGHT0, GL_SPECULAR, [1,1,1,1])
+        glLightfv(GL_LIGHT1, GL_DIFFUSE,  [0.8,0.8,1,1]); glLightfv(GL_LIGHT1, GL_SPECULAR,[0.8,0.8,1,1])
 
-        # couleurs des deux lampes
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, [1, 1, 1, 1])
-        glLightfv(GL_LIGHT0, GL_SPECULAR, [1, 1, 1, 1])
-        glLightfv(GL_LIGHT1, GL_DIFFUSE, [0.8, 0.8, 1, 1])
-        glLightfv(GL_LIGHT1, GL_SPECULAR, [0.8, 0.8, 1, 1])
-
-
-    # ---------- utilitaires ------------------------------------------------------
+    # petits helpers
     def _draw_axes(self):
+        glDisable(GL_LIGHTING)  # couleur non affectée par la lumière
         glLineWidth(2.0)
         glBegin(GL_LINES)
-        glColor3f(1, 0, 0); glVertex3f(*self.axis_origin); glVertex3f(self.axis_origin[0]+AXIS_LEN, self.axis_origin[1], self.axis_origin[2])
-        glColor3f(0, 1, 0); glVertex3f(*self.axis_origin); glVertex3f(self.axis_origin[0], self.axis_origin[1]+AXIS_LEN, self.axis_origin[2])
-        glColor3f(0, 0, 1); glVertex3f(*self.axis_origin); glVertex3f(self.axis_origin[0], self.axis_origin[1], self.axis_origin[2]+AXIS_LEN)
-        glEnd()
-        glColor3f(1, 1, 1)
 
-    def _draw_text(self, txt, x, y, color=(0, 0, 0)):
-        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity()
-        gluOrtho2D(0, 800, 0, 600)
+        ox, oy, oz = self.axis_origin
+
+        # X rouge
+        glColor3f(1.0, 0.0, 0.0)
+        glVertex3f(ox, oy, oz)
+        glVertex3f(ox + AXIS_LEN, oy, oz)
+
+        # Y vert
+        glColor3f(0.0, 1.0, 0.0)
+        glVertex3f(ox, oy, oz)
+        glVertex3f(ox, oy + AXIS_LEN, oz)
+
+        # Z bleu
+        glColor3f(0.0, 0.0, 1.0)
+        glVertex3f(ox, oy, oz)
+        glVertex3f(ox, oy, oz + AXIS_LEN)
+
+        glEnd()
+        glLineWidth(1.0)
+        glEnable(GL_LIGHTING)
+
+    def _draw_text(self, txt, x, y, color=(1,1,1)):
+        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); gluOrtho2D(0, 800, 0, 600)
         glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity()
-        glDisable(GL_LIGHTING); glDisable(GL_DEPTH_TEST)
-        glColor3f(*color)
+        glDisable(GL_LIGHTING); glDisable(GL_DEPTH_TEST); glColor3f(*color)
         glRasterPos2f(x, y)
-        for ch in txt:
-            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+        for ch in txt: glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
         glEnable(GL_DEPTH_TEST); glEnable(GL_LIGHTING)
         glPopMatrix(); glMatrixMode(GL_PROJECTION); glPopMatrix(); glMatrixMode(GL_MODELVIEW)
 
@@ -276,617 +373,119 @@ class Renderer:
                 glVertex3f(v.x, v.y, v.z)
         glEnd()
 
-    # ---------- dessin principal --------------------------------------------------
-    # ------------------------------------------------------------------
-    # 3)  RENDER
-    # ------------------------------------------------------------------
+    # rendu
     def render(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
-
-        # ── CAMÉRA : zoom (avance/recul) + rotations souris (Euler) ─────────
         glTranslatef(0, 0, -self.zoom)
         glRotatef(self.angle_x, 1, 0, 0)
         glRotatef(self.angle_y, 0, 1, 0)
 
-        # positions des lampes (dans le repère courant caméra)
         glLightfv(GL_LIGHT0, GL_POSITION, Renderer.LIGHT0_POS)
         glLightfv(GL_LIGHT1, GL_POSITION, Renderer.LIGHT1_POS)
 
         self._draw_axes()
 
-        # ── VOITURE ─────────────────────────────────────────────────────────
-        glPushMatrix()
-        glTranslatef(*self.car_pos)
+        # ===== voiture =====
+        glPushMatrix(); glTranslatef(*self.car_pos)
 
-        # --- Carrosserie (demi-châssis modélisé → on mirrore X pour l'autre côté)
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.9, 0.1, 0.1, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0, 1.0, 1.0, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64)
-
-        # côté droit (réellement modélisé)
-        self._draw_mesh(self.sector.triangles_body)
-        # côté gauche (miroir X → inversion de winding)
-        glPushMatrix()
-        glScalef(-1, 1, 1);
-        glFrontFace(GL_CW)
-        self._draw_mesh(self.sector.triangles_body)
-        glFrontFace(GL_CCW);
-        glPopMatrix()
-
-        # --- Vitres (gauche modélisée + miroir droite)
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.12, 0.12, 0.12, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.5, 0.5, 0.5, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 16)
-        # vitres gauche
-        self._draw_mesh(self.sector.triangles_windows)
-        # vitres droite (miroir)
-        glPushMatrix()
-        glScalef(-1, 1, 1);
-        glFrontFace(GL_CW)
-        self._draw_mesh(self.sector.triangles_windows)
-        glFrontFace(GL_CCW);
-        glPopMatrix()
-
-        # --- Phares (un seul modèle à droite + miroir gauche)
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [1.0, 0.9, 0.3, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0, 1.0, 0.8, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 32)
-        # droit
-        self._draw_mesh(self.sector.triangles_headlight)
-        # gauche (miroir)
-        glPushMatrix()
-        glScalef(-1, 1, 1);
-        glFrontFace(GL_CW)
-        self._draw_mesh(self.sector.triangles_headlight)
-        glFrontFace(GL_CCW);
-        glPopMatrix()
-
-        # --- Roues (même mesh réutilisé 4×)
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.05, 0.05, 0.05, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.30, 0.30, 0.30, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 8)
-
-        wheel_x = HALF_W - 0.1  # près des ailes
-        wheel_z = HALF_LEN - 0.6  # léger retrait des coins
-        wheel_y = BASE_Y0  # posé au bas de caisse
-
-        for x, y, z in [(wheel_x, wheel_y, -wheel_z),  # arrière-gauche (vue locale)
-                        (-wheel_x, wheel_y, -wheel_z),
-                        (wheel_x, wheel_y, wheel_z),
-                        (-wheel_x, wheel_y, wheel_z)]:
-            glPushMatrix()
-            glTranslatef(x, y, z)
-            glRotatef(90, 0, 1, 0)
-            if x < 0:
-                glScalef(-1, 1, 1);
-                glFrontFace(GL_CW)
-            self._draw_mesh(self.sector.triangles_wheel)
-            if x < 0:
-                glFrontFace(GL_CCW)
-            glPopMatrix()
-
-        glPopMatrix()  # fin voiture
-
-        # ── Sphères repère des lumières (émissives, toggle 'l') ────────────
-        if self.show_lights:
-            glPushAttrib(GL_LIGHTING_BIT)
-            glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0, 1])
-            glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1, 1, 0, 1])
-            for px, py, pz, _ in (Renderer.LIGHT0_POS, Renderer.LIGHT1_POS):
-                glPushMatrix();
-                glTranslatef(px, py, pz)
-                glutSolidSphere(0.25, 16, 16)
-                glPopMatrix()
-            glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])
-            glPopAttrib()
-
-        # ── Bonus : lampadaire ─────────────────────────────────────────────
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.3, 0.3, 0.3, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.5, 0.5, 0.5, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 16)
-        self._draw_mesh(self.extras.tris)
-        self.extras.draw_emissive_sphere()
-
-        # ── HUD ────────────────────────────────────────────────────────────
-        self._draw_text(f"Car Pos:   {self.car_pos}", 10, 580)
-        self._draw_text(f"Axis Orig: {self.axis_origin}", 10, 555)
-        self._draw_text(f"'l' : toggle light spheres", 10, 530)
-
-        glutSwapBuffers()
-
-
-    # -------- quaternions utilitaires -----------------------------------
-    def _project_on_sphere(self, x, y):
-        # convertit coordonnées pixels → [-1,1] puis projette sur sphère de rayon 1
-        nx = (2.0 * x - self.win_w) / self.win_w
-        ny = -(2.0 * y - self.win_h) / self.win_h
-        nz2 = 1.0 - nx * nx - ny * ny
-        nz = math.sqrt(max(0.0, nz2))
-        l = math.sqrt(nx * nx + ny * ny + nz * nz)
-        return (nx / l, ny / l, nz / l)
-
-    @staticmethod
-    def _quat_mult(q1, q2):
-        w1, x1, y1, z1 = q1;
-        w2, x2, y2, z2 = q2
-        return (
-            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-        )
-
-    @staticmethod
-    def _quat_normalize(q):
-        w, x, y, z = q
-        n = math.sqrt(w * w + x * x + y * y + z * z)
-        if n == 0.0:
-            return (1.0, 0.0, 0.0, 0.0)
-        return (w / n, x / n, y / n, z / n)
-
-    @staticmethod
-    def _quat_to_matrix(q):
-        # retourne une matrice 4×4 en colonne-majeur (OpenGL)
-        w, x, y, z = q
-        xx, xy, xz = 1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)
-        yx, yy, yz = 2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)
-        zx, zy, zz = 2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)
-        return [
-            xx, yx, zx, 0,
-            xy, yy, zy, 0,
-            xz, yz, zz, 0,
-             0,  0,  0, 1
-        ]
-
-    # ---------- entrées clavier/souris -------------------------------------------
-    # ------------------------------------------------------------------
-    # 2)  CLAVIER
-    # ------------------------------------------------------------------
-    def on_keys(self, key, *_):
-        if key == b'w':
-            self.car_pos[1] += 0.1
-        elif key == b's':
-            self.car_pos[1] -= 0.1
-        elif key == b'a':
-            self.car_pos[0] -= 0.1
-        elif key == b'd':
-            self.car_pos[0] += 0.1
-        elif key == b'z':
-            self.car_pos[2] += 0.1
-        elif key == b'x':
-            self.car_pos[2] -= 0.1
-
-        elif key == b'i':
-            self.axis_origin[1] += 0.1
-        elif key == b'k':
-            self.axis_origin[1] -= 0.1
-        elif key == b'j':
-            self.axis_origin[0] -= 0.1
-        elif key == b'L':
-            self.axis_origin[0] += 0.1  # (majuscule)
-
-        elif key == b'u':
-            self.axis_origin[2] += 0.1
-        elif key == b'o':
-            self.axis_origin[2] -= 0.1
-
-        elif key == b'+':
-            self.zoom = max(2.0, self.zoom - 0.5)
-        elif key == b'-':
-            self.zoom += 0.5
-
-        elif key == b'l':
-            self.show_lights = not self.show_lights  # toggle sphères
-
-        glutPostRedisplay()
-
-
-
-    def on_mouse_click(self, button, state, x, y):
-        if button == 3 and state == GLUT_DOWN:  # molette +
-            self.zoom = max(2.0, self.zoom - 0.5); glutPostRedisplay(); return
-        if button == 4 and state == GLUT_DOWN:  # molette -
-            self.zoom += 0.5; glutPostRedisplay(); return
-        if button == GLUT_RIGHT_BUTTON:
-            self.mouse_drag_zoom = (state == GLUT_DOWN); self.last_mouse = (x, y)
-        if button == GLUT_LEFT_BUTTON:
-            self.mouse_drag = (state == GLUT_DOWN); self.last_mouse = (x, y)
-
-    def on_mouse_motion(self, x, y):
-        if self.mouse_drag_zoom:
-            dy = y - self.last_mouse[1]
-            self.zoom = max(2.0, self.zoom + dy * 0.05)
-
-        elif self.mouse_drag:
-            dx = x - self.last_mouse[0]
-            dy = y - self.last_mouse[1]
-            self.angle_y += dx * 0.5  # même sensibilité que main_cube2
-            self.angle_x += dy * 0.5
-
-        self.last_mouse = (x, y)
-        glutPostRedisplay()
-
-# ───────────────────────────────────────────────
-# 4)  RESHAPE
-# ───────────────────────────────────────────────
-def reshape(w, h):
-    global app                         # ← accès à l'instance Renderer
-    h = max(h, 1)
-    app.win_w, app.win_h = w, h        # mets à jour pour le trackball
-    glViewport(0, 0, w, h)
-    glMatrixMode(GL_PROJECTION)
-    glLoadIdentity()
-    gluPerspective(80.0, w / float(h), 0.1, 100.0)
-    glMatrixMode(GL_MODELVIEW)
-# ───────────────────────────────────────────────
-# 5)  MAIN
-# ───────────────────────────────────────────────
-def main():
-    global app                         # ← variable globale partagée
-    glutInit(sys.argv)
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
-    glutInitWindowSize(800, 600)
-    glutCreateWindow(b"Low-poly Car  Trackball Lights")
-
-    app = Renderer()
-    app.init_gl()
-
-    glutDisplayFunc(app.render)
-    glutReshapeFunc(reshape)
-    glutKeyboardFunc(app.on_keys)
-    glutMouseFunc(app.on_mouse_click)
-    glutMotionFunc(app.on_mouse_motion)
-    glutIdleFunc(app.render)
-
-    glutMainLoop()
-
-
-if __name__ == "__main__":
-    main()# main.py – Low-poly car • Trackball • HUD • Miroir • Éclairage
-# Python 3.x  +  PyOpenGL  +  FreeGLUT
-from OpenGL.GL   import *
-from OpenGL.GLU  import *
-from OpenGL.GLUT import *
-import sys, math
-
-AXIS_LEN = 3.0  # longueur des axes XYZ
-
-# utilisé par reshape / callbacks
-app = None
-
-# ───────────────────────────────────────────────
-# 1)  STRUCTURES DE DONNÉES
-# ───────────────────────────────────────────────
-class Vertex:
-    def __init__(self, x, y, z, u=0, v=0):
-        self.x, self.y, self.z = x, y, z
-        self.u, self.v        = u, v
-
-class Triangle:
-    def __init__(self, vertices):
-        self.vertices = vertices           # list[3] Vertex
-
-# ───────────────────────────────────────────────
-# 2)  LOW-POLY CAR (Sector) : on modèle UNE FOIS
-# ───────────────────────────────────────────────
-
-class ExtraModels:
-    def __init__(self):
-        self.tris = []
-        self.tris += self._build_lamp_post()
-
-    def _build_lamp_post(self):
-        t = []
-        # Tige verticale
-        t += Sector._cylinder((5, 0, 0), 0.1, 2.0)
-        # Tête du lampadaire
-        t += Sector._cuboid((4.8, 2.0, -0.2), (5.2, 2.2, 0.2))
-        # Sphère émissive (optionnel, visible uniquement)
-        self.lamp_sphere_pos = (5.0, 2.1, 0.0)
-        return t
-
-    def draw_emissive_sphere(self):
-        # Sphère lumineuse jaune non affectée par l’éclairage
-        glPushAttrib(GL_LIGHTING_BIT)
-        glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0.2, 1])  # jaune doux
-        glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1, 1, 0.2, 1])
-        glPushMatrix()
-        glTranslatef(*self.lamp_sphere_pos)
-        glutSolidSphere(0.15, 12, 12)
-        glPopMatrix()
-        glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])  # reset
-        glPopAttrib()
-
-# ───────────────────────────────────────────────
-# 3)  RENDERER
-# ───────────────────────────────────────────────
-class Renderer:
-    # --- positions WORLD des lumières ----
-    LIGHT0_POS = [ 3.0, 3.0,  4.0, 1.0]
-    LIGHT1_POS = [-4.0, 5.0, -2.0, 1.0]
-
-    def __init__(self):
-        self.sector = Sector()
-
-        # caméra / trackball
-        self.zoom            = 10.0
-        self.angle_x, self.angle_y = 20.0, 30.0
-        self.mouse_drag = False
-        self.mouse_drag_zoom = False
-        self.last_mouse = (0, 0)
-
-        # translation de la voiture / origine axes
-        self.car_pos     = [0.0, 0.0, 0.0]
-        self.axis_origin = [0.0, 0.0, 0.0]
-
-        # toggle sphères lumières
-        self.show_lights = True
-
-        self.rot_q = [1.0, 0.0, 0.0, 0.0]  # quaternion (w,x,y,z)
-        self.last_vec = (0.0, 0.0, 1.0)
-        self.win_w, self.win_h = 800, 600
-        self.extras = ExtraModels()
-    # ------------------------------------------------------------------
-    # 1)  INITIALISATION OPENGL
-    # ------------------------------------------------------------------
-    def init_gl(self):
-        glEnable(GL_DEPTH_TEST)
-        glEnable(GL_LIGHTING)
-        glEnable(GL_LIGHT0)
-        glEnable(GL_LIGHT1)
-        glEnable(GL_NORMALIZE)
-
-        # --- modèle d’éclairage : one-sided (définitif) ---------------
-        #      ↳ passe à GL_TRUE seulement pour déboguer les normales
-        glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_FALSE)
-
-        # --- back-face culling (exigence finale) -----------------------
-        glEnable(GL_CULL_FACE)
-        glCullFace(GL_BACK)
-        glFrontFace(GL_CCW)  # CCW = face avant
-
-        glShadeModel(GL_SMOOTH)
-        glClearColor(1.0, 1.0, 1.0, 1.0)
-
-        # couleurs des deux lampes
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, [1, 1, 1, 1])
-        glLightfv(GL_LIGHT0, GL_SPECULAR, [1, 1, 1, 1])
-        glLightfv(GL_LIGHT1, GL_DIFFUSE, [0.8, 0.8, 1, 1])
-        glLightfv(GL_LIGHT1, GL_SPECULAR, [0.8, 0.8, 1, 1])
-
-
-    # ---------- utilitaires ------------------------------------------------------
-    def _draw_axes(self):
-        glLineWidth(2.0)
-        glBegin(GL_LINES)
-        glColor3f(1, 0, 0); glVertex3f(*self.axis_origin); glVertex3f(self.axis_origin[0]+AXIS_LEN, self.axis_origin[1], self.axis_origin[2])
-        glColor3f(0, 1, 0); glVertex3f(*self.axis_origin); glVertex3f(self.axis_origin[0], self.axis_origin[1]+AXIS_LEN, self.axis_origin[2])
-        glColor3f(0, 0, 1); glVertex3f(*self.axis_origin); glVertex3f(self.axis_origin[0], self.axis_origin[1], self.axis_origin[2]+AXIS_LEN)
-        glEnd()
-        glColor3f(1, 1, 1)
-
-    def _draw_text(self, txt, x, y, color=(0, 0, 0)):
-        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity()
-        gluOrtho2D(0, 800, 0, 600)
-        glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity()
-        glDisable(GL_LIGHTING); glDisable(GL_DEPTH_TEST)
-        glColor3f(*color)
-        glRasterPos2f(x, y)
-        for ch in txt:
-            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
-        glEnable(GL_DEPTH_TEST); glEnable(GL_LIGHTING)
-        glPopMatrix(); glMatrixMode(GL_PROJECTION); glPopMatrix(); glMatrixMode(GL_MODELVIEW)
-
-    @staticmethod
-    def _face_normal(p0, p1, p2):
-        ux, uy, uz = p1.x-p0.x, p1.y-p0.y, p1.z-p0.z
-        vx, vy, vz = p2.x-p0.x, p2.y-p0.y, p2.z-p0.z
-        nx, ny, nz = uy*vz - uz*vy, uz*vx - ux*vz, ux*vy - uy*vx
-        inv_len = 1.0 / math.sqrt(nx*nx + ny*ny + nz*nz)
-        return nx*inv_len, ny*inv_len, nz*inv_len
-
-    def _draw_mesh(self, tris):
-        glBegin(GL_TRIANGLES)
-        for tri in tris:
-            n = self._face_normal(*tri.vertices)
-            glNormal3f(*n)
-            for v in tri.vertices:
-                glVertex3f(v.x, v.y, v.z)
-        glEnd()
-
-    # ---------- dessin principal --------------------------------------------------
-    # ------------------------------------------------------------------
-    # 3)  RENDER
-    # ------------------------------------------------------------------
-    def render(self):
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glLoadIdentity()
-
-        # ---------- CAMÉRA ----------
-        # 1) rotation (trackball)  2) zoom (recul sur Z)
-        glMultMatrixf(self._quat_to_matrix(self.rot_q))   # applique la rotation
-        glTranslatef(0, 0, -self.zoom)                   # puis recule la caméra
-
-        # positions des lampes dans le repère courant
-        glLightfv(GL_LIGHT0, GL_POSITION, Renderer.LIGHT0_POS)
-        glLightfv(GL_LIGHT1, GL_POSITION, Renderer.LIGHT1_POS)
-
-        self._draw_axes()
-
-        # ------------------ voiture -----------------------------------
-        glPushMatrix()
-        glTranslatef(*self.car_pos)
+        glDisable(GL_CULL_FACE)
 
         # carrosserie
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.9, 0.1, 0.1, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1, 1, 1, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64)
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.22, 0.45, 0.80, 1])  # bleu carrosserie
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.35, 0.45, 0.55, 1])
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 48)
         self._draw_mesh(self.sector.triangles_body)
 
-        # vitres (gauche + miroir droite)
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.1, 0.1, 0.1, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.5, 0.5, 0.5, 1])
+
+        # vitres
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.95, 0.95, 0.85, 1])  # beige clair
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0, 1.0, 1.0, 1])  # reflet blanc
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64)
+        self._draw_mesh(self.sector.triangles_windows)
+
+        # phares (un modèle + miroir simple)
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.95,0.85,0.30,1])
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0,1.0,0.8,1])
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 40)
+        self._draw_mesh(self.sector.triangles_headlight)
+        glPushMatrix(); glScalef(-1,1,1); glFrontFace(GL_CW)
+        self._draw_mesh(self.sector.triangles_headlight)
+        glFrontFace(GL_CCW); glPopMatrix()
+
+        # ---- couleur spécifique pour la pièce sous phares ----
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.22, 0.45, 0.80, 1])  # bleu carrosserie
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.35, 0.45, 0.55, 1])
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 48)
+        self._draw_mesh(self.sector.triangles_under_headlight)
+
+        # roues (1 mesh × 4)
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.95, 0.95, 0.85, 1])
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0, 1.0, 1.0, 1])
         glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 16)
-        self._draw_mesh(self.sector.triangles_windows)
-        glPushMatrix()
-        glScalef(-1, 1, 1);
-        glFrontFace(GL_CW)
-        self._draw_mesh(self.sector.triangles_windows)
-        glFrontFace(GL_CCW);
-        glPopMatrix()
 
-        # ----- phares (un modèle, miroir à gauche) --------------------------
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [1.0, 0.9, 0.3, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0, 1.0, 0.8, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 32)
+        wheel_x = HALF_W - 0.12
+        wheel_z_front = HALF_LEN - 0.55
+        wheel_z_back  = HALF_LEN - 1.55
+        wheel_y = BASE_Y0
 
-        # projecteur droit (celui qu’on a réellement modélisé)
-        self._draw_mesh(self.sector.triangles_headlight)
+        def place_wheel(x, y, z):
+            glPushMatrix(); glTranslatef(x,y,z); glRotatef(90,0,1,0)
+            self._draw_mesh(self.sector.triangles_wheel); glPopMatrix()
 
-        # miroir : projecteur gauche
-        glPushMatrix()
-        glScalef(-1, 1, 1)
-        glFrontFace(GL_CW)
-        self._draw_mesh(self.sector.triangles_headlight)
-        glFrontFace(GL_CCW)
-        glPopMatrix()
+        place_wheel(+wheel_x, wheel_y, +wheel_z_front)
+        place_wheel(-wheel_x, wheel_y, +wheel_z_front)
+        place_wheel(+wheel_x, wheel_y, -wheel_z_back)
+        place_wheel(-wheel_x, wheel_y, -wheel_z_back)
 
-        # roues (4 × même mesh)
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.05, 0.05, 0.05, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.3, 0.3, 0.3, 1])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 8)
-        for x, y, z in [(1.1, -0.5, -1.5), (-1.1, -0.5, -1.5),
-                        (1.1, -0.5, 1.5), (-1.1, -0.5, 1.5)]:
-            glPushMatrix();
-            glTranslatef(x, y, z)
-            if x < 0:
-                glScalef(-1, 1, 1);
-                glFrontFace(GL_CW)
-            self._draw_mesh(self.sector.triangles_wheel)
-            if x < 0: glFrontFace(GL_CCW)
-            glPopMatrix()
+        glPopMatrix()  # ===== fin voiture =====
 
-        glPopMatrix()  # voiture
-
-        # ------------------ sphères-repères des lampes -----------------
+        # sphères repères des lumières
         if self.show_lights:
             glPushAttrib(GL_LIGHTING_BIT)
-            glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0, 1])  # jaune émissif
-            glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1, 1, 0, 1])
+            glMaterialfv(GL_FRONT, GL_EMISSION, [1,1,0,1])
+            glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1,1,0,1])
             for px, py, pz, _ in (Renderer.LIGHT0_POS, Renderer.LIGHT1_POS):
-                glPushMatrix();
-                glTranslatef(px, py, pz)
-                glutSolidSphere(0.25, 16, 16)
-                glPopMatrix()
-            glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])  # reset
-            glPopAttrib()
+                glPushMatrix(); glTranslatef(px,py,pz); glutSolidSphere(0.25,16,16); glPopMatrix()
+            glMaterialfv(GL_FRONT, GL_EMISSION, [0,0,0,1]); glPopAttrib()
 
-        # ------------------ modèle bonus : lampadaire ---------------------
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.3, 0.3, 0.3, 1])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.5, 0.5, 0.5, 1])
+        # bonus lampadaire
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, [0.3,0.3,0.3,1])
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.5,0.5,0.5,1])
         glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 16)
         self._draw_mesh(self.extras.tris)
         self.extras.draw_emissive_sphere()
 
-        # ------------------ HUD ----------------------------------------
+        # HUD
         self._draw_text(f"Car Pos:   {self.car_pos}", 10, 580)
         self._draw_text(f"Axis Orig: {self.axis_origin}", 10, 555)
         self._draw_text(f"'l' : toggle light spheres", 10, 530)
 
         glutSwapBuffers()
 
-    # -------- quaternions utilitaires -----------------------------------
-    def _project_on_sphere(self, x, y):
-        # convertit coordonnées pixels → [-1,1] puis projette sur sphère de rayon 1
-        nx = (2.0 * x - self.win_w) / self.win_w
-        ny = -(2.0 * y - self.win_h) / self.win_h
-        nz2 = 1.0 - nx * nx - ny * ny
-        nz = math.sqrt(max(0.0, nz2))
-        l = math.sqrt(nx * nx + ny * ny + nz * nz)
-        return (nx / l, ny / l, nz / l)
-
-    @staticmethod
-    def _quat_mult(q1, q2):
-        w1, x1, y1, z1 = q1;
-        w2, x2, y2, z2 = q2
-        return (
-            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-        )
-
-    @staticmethod
-    def _quat_normalize(q):
-        w, x, y, z = q
-        n = math.sqrt(w * w + x * x + y * y + z * z)
-        if n == 0.0:
-            return (1.0, 0.0, 0.0, 0.0)
-        return (w / n, x / n, y / n, z / n)
-
-    @staticmethod
-    def _quat_to_matrix(q):
-        # retourne une matrice 4×4 en colonne-majeur (OpenGL)
-        w, x, y, z = q
-        xx, xy, xz = 1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)
-        yx, yy, yz = 2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)
-        zx, zy, zz = 2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)
-        return [
-            xx, yx, zx, 0,
-            xy, yy, zy, 0,
-            xz, yz, zz, 0,
-             0,  0,  0, 1
-        ]
-
-    # ---------- entrées clavier/souris -------------------------------------------
-    # ------------------------------------------------------------------
-    # 2)  CLAVIER
-    # ------------------------------------------------------------------
+    # entrées
     def on_keys(self, key, *_):
-        if key == b'w':
-            self.car_pos[1] += 0.1
-        elif key == b's':
-            self.car_pos[1] -= 0.1
-        elif key == b'a':
-            self.car_pos[0] -= 0.1
-        elif key == b'd':
-            self.car_pos[0] += 0.1
-        elif key == b'z':
-            self.car_pos[2] += 0.1
-        elif key == b'x':
-            self.car_pos[2] -= 0.1
-
-        elif key == b'i':
-            self.axis_origin[1] += 0.1
-        elif key == b'k':
-            self.axis_origin[1] -= 0.1
-        elif key == b'j':
-            self.axis_origin[0] -= 0.1
-        elif key == b'L':
-            self.axis_origin[0] += 0.1  # (majuscule)
-
-        elif key == b'u':
-            self.axis_origin[2] += 0.1
-        elif key == b'o':
-            self.axis_origin[2] -= 0.1
-
-        elif key == b'+':
-            self.zoom = max(2.0, self.zoom - 0.5)
-        elif key == b'-':
-            self.zoom += 0.5
-
-        elif key == b'l':
-            self.show_lights = not self.show_lights  # toggle sphères
-
+        if   key == b'w': self.car_pos[1] += 0.1
+        elif key == b's': self.car_pos[1] -= 0.1
+        elif key == b'a': self.car_pos[0] -= 0.1
+        elif key == b'd': self.car_pos[0] += 0.1
+        elif key == b'z': self.car_pos[2] += 0.1
+        elif key == b'x': self.car_pos[2] -= 0.1
+        elif key == b'i': self.axis_origin[1] += 0.1
+        elif key == b'k': self.axis_origin[1] -= 0.1
+        elif key == b'j': self.axis_origin[0] -= 0.1
+        elif key == b'L': self.axis_origin[0] += 0.1
+        elif key == b'u': self.axis_origin[2] += 0.1
+        elif key == b'o': self.axis_origin[2] -= 0.1
+        elif key == b'+': self.zoom = max(2.0, self.zoom - 0.5)
+        elif key == b'-': self.zoom += 0.5
+        elif key == b'l': self.show_lights = not self.show_lights
         glutPostRedisplay()
 
-
-
     def on_mouse_click(self, button, state, x, y):
-        if button == 3 and state == GLUT_DOWN:  # molette +
+        if button == 3 and state == GLUT_DOWN:
             self.zoom = max(2.0, self.zoom - 0.5); glutPostRedisplay(); return
-        if button == 4 and state == GLUT_DOWN:  # molette -
+        if button == 4 and state == GLUT_DOWN:
             self.zoom += 0.5; glutPostRedisplay(); return
         if button == GLUT_RIGHT_BUTTON:
             self.mouse_drag_zoom = (state == GLUT_DOWN); self.last_mouse = (x, y)
@@ -897,64 +496,41 @@ class Renderer:
         if self.mouse_drag_zoom:
             dy = y - self.last_mouse[1]
             self.zoom = max(2.0, self.zoom + dy * 0.05)
-
         elif self.mouse_drag:
-            v_from = self._project_on_sphere(*self.last_mouse)
-            v_to   = self._project_on_sphere(x, y)
-
-            axis = (
-                v_from[1]*v_to[2] - v_from[2]*v_to[1],
-                v_from[2]*v_to[0] - v_from[0]*v_to[2],
-                v_from[0]*v_to[1] - v_from[1]*v_to[0]
-            )
-            axis_len = math.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2)
-            if axis_len > 1e-6:
-                axis = (axis[0]/axis_len, axis[1]/axis_len, axis[2]/axis_len)
-                dot   = max(-1.0, min(1.0,
-                        v_from[0]*v_to[0] + v_from[1]*v_to[1] + v_from[2]*v_to[2]))
-                angle = math.acos(dot)
-                s = math.sin(angle/2.0)
-                q_drag = (math.cos(angle/2.0), axis[0]*s, axis[1]*s, axis[2]*s)
-                self.rot_q = self._quat_mult(q_drag, self.rot_q)
-                self.rot_q = self._quat_normalize(self.rot_q)
-
-        self.last_mouse = (x, y)
-        glutPostRedisplay()
+            dx = x - self.last_mouse[0]; dy = y - self.last_mouse[1]
+            self.angle_y += dx * 0.5; self.angle_x += dy * 0.5
+        self.last_mouse = (x, y); glutPostRedisplay()
 
 # ───────────────────────────────────────────────
 # 4)  RESHAPE
 # ───────────────────────────────────────────────
 def reshape(w, h):
-    global app                         # ← accès à l'instance Renderer
+    global app
     h = max(h, 1)
-    app.win_w, app.win_h = w, h        # mets à jour pour le trackball
+    app.win_w, app.win_h = w, h
     glViewport(0, 0, w, h)
-    glMatrixMode(GL_PROJECTION)
-    glLoadIdentity()
+    glMatrixMode(GL_PROJECTION); glLoadIdentity()
     gluPerspective(80.0, w / float(h), 0.1, 100.0)
     glMatrixMode(GL_MODELVIEW)
+
 # ───────────────────────────────────────────────
 # 5)  MAIN
 # ───────────────────────────────────────────────
 def main():
-    global app                         # ← variable globale partagée
+    global app
     glutInit(sys.argv)
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
     glutInitWindowSize(800, 600)
     glutCreateWindow(b"Low-poly Car  Trackball Lights")
 
-    app = Renderer()
-    app.init_gl()
-
+    app = Renderer(); app.init_gl()
     glutDisplayFunc(app.render)
     glutReshapeFunc(reshape)
     glutKeyboardFunc(app.on_keys)
     glutMouseFunc(app.on_mouse_click)
     glutMotionFunc(app.on_mouse_motion)
     glutIdleFunc(app.render)
-
     glutMainLoop()
-
 
 if __name__ == "__main__":
     main()
