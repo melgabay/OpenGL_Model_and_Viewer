@@ -4,6 +4,7 @@ from OpenGL.GL   import *
 from OpenGL.GLU  import *
 from OpenGL.GLUT import *
 import sys, math
+from trackball import Trackball
 
 AXIS_LEN = 3.0  # longueur des axes XYZ
 
@@ -279,13 +280,14 @@ class ExtraModels:
         return t
 
     def draw_emissive_sphere(self):
-        glPushAttrib(GL_LIGHTING_BIT)
-        glMaterialfv(GL_FRONT, GL_EMISSION, [1, 1, 0.2, 1])
-        glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1, 1, 0.2, 1])
-        glPushMatrix(); glTranslatef(*self.lamp_sphere_pos)
+        # Affichage "balise" indépendante des lumières de la scène
+        glPushAttrib(GL_ENABLE_BIT | GL_CURRENT_BIT | GL_LIGHTING_BIT)
+        glDisable(GL_LIGHTING)
+        glColor3f(1.0, 1.0, 0.2)
+        glPushMatrix()
+        glTranslatef(*self.lamp_sphere_pos)
         glutSolidSphere(0.15, 12, 12)
         glPopMatrix()
-        glMaterialfv(GL_FRONT, GL_EMISSION, [0, 0, 0, 1])
         glPopAttrib()
 
 # ───────────────────────────────────────────────
@@ -294,6 +296,7 @@ class ExtraModels:
 class Renderer:
     LIGHT0_POS = [ 3.0, 3.0,  4.0, 1.0]
     LIGHT1_POS = [-4.0, 5.0, -2.0, 1.0]
+
 
     def __init__(self):
         self.sector = Sector()
@@ -307,6 +310,13 @@ class Renderer:
         self.axis_origin = [0.0, 0.0, 0.0]
         self.show_lights = True
         self.extras = ExtraModels()
+
+        # AJOUTS
+        self.show_axes = True
+        self.wireframe = False
+        self.use_trackball = True
+        self.trackball = Trackball()
+
 
     # init OpenGL
     def init_gl(self):
@@ -480,7 +490,51 @@ class Renderer:
         elif key == b'+': self.zoom = max(2.0, self.zoom - 0.5)
         elif key == b'-': self.zoom += 0.5
         elif key == b'l': self.show_lights = not self.show_lights
+
+        # AJOUTS: toggles demandés par l'énoncé
+        elif key == b'p':
+            self.wireframe = not self.wireframe
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if self.wireframe else GL_FILL)
+        elif key == b'a':
+            self.show_axes = not self.show_axes
+
         glutPostRedisplay()
+
+    def _draw_wheel_glu(self, radius=WHEEL_R, half_w=WHEEL_HALF_W, slices=24):
+        quad = gluNewQuadric()
+        gluQuadricNormals(quad, GLU_SMOOTH)
+
+        # Cylindre le long de +Z (hauteur = 2*half_w)
+        gluCylinder(quad, radius, radius, 2.0 * half_w, slices, 1)
+
+        # Disque arrière (z=0)
+        gluDisk(quad, 0.0, radius, slices, 1)
+
+        # Disque avant (z=2*half_w)
+        glPushMatrix()
+        glTranslatef(0.0, 0.0, 2.0 * half_w)
+        gluDisk(quad, 0.0, radius, slices, 1)
+        glPopMatrix()
+
+        gluDeleteQuadric(quad)
+
+    def _draw_headlight_glu(self, radius=0.12, half_t=0.03, slices=24):
+        quad = gluNewQuadric()
+        gluQuadricNormals(quad, GLU_SMOOTH)
+
+        # On dessine un cylindre centré en z dans [0, 2*half_t]
+        gluCylinder(quad, radius, radius, 2.0 * half_t, slices, 1)
+
+        # Disque arrière (z=0)
+        gluDisk(quad, 0.0, radius, slices, 1)
+
+        # Disque avant (z=2*half_t)
+        glPushMatrix()
+        glTranslatef(0.0, 0.0, 2.0 * half_t)
+        gluDisk(quad, 0.0, radius, slices, 1)
+        glPopMatrix()
+
+        gluDeleteQuadric(quad)
 
     def on_mouse_click(self, button, state, x, y):
         if button == 3 and state == GLUT_DOWN:
@@ -491,6 +545,9 @@ class Renderer:
             self.mouse_drag_zoom = (state == GLUT_DOWN); self.last_mouse = (x, y)
         if button == GLUT_LEFT_BUTTON:
             self.mouse_drag = (state == GLUT_DOWN); self.last_mouse = (x, y)
+            if self.use_trackball:
+                # réinitialise la séquence de drag du trackball
+                self.trackball.prev = None
 
     def on_mouse_motion(self, x, y):
         if self.mouse_drag_zoom:
@@ -512,6 +569,9 @@ def reshape(w, h):
     glMatrixMode(GL_PROJECTION); glLoadIdentity()
     gluPerspective(80.0, w / float(h), 0.1, 100.0)
     glMatrixMode(GL_MODELVIEW)
+    # MAJ trackball pour une projection correcte de la souris
+    if hasattr(app, "trackball") and app.trackball:
+        app.trackball.win_w, app.trackball.win_h = w, h
 
 # ───────────────────────────────────────────────
 # 5)  MAIN
